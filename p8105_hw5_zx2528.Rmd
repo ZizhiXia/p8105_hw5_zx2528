@@ -1,0 +1,223 @@
+---
+title: "p8105_hw5_zx2528"
+author: "Zizhi Xia_zx2528"
+date: "2025-11-14"
+output: github_document
+---
+# problem 1
+```{r}
+birthday_sim = function(n) {
+  birthdays = sample(1:365, size = n, replace = TRUE)
+  any(duplicated(birthdays))
+}
+```
+
+```{r}
+library(tidyverse)
+
+set.seed(1234)
+
+results =
+  tibble(
+    n = 2:50,
+    prob = map_dbl(n, function(x) {
+      mean(replicate(10000, birthday_sim(x)))
+    })
+  )
+```
+
+```{r}
+results %>%
+  ggplot(aes(x = n, y = prob)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 1.8) +
+  labs(
+    title = "Probability That At Least Two People Share a Birthday",
+    x = "Group size (n)",
+    y = "Probability"
+  ) +
+  theme_minimal(base_size = 14)
+```
+We observe that the probability of shared birthdays increases rapidly as group size increases.
+By the time the group size reaches 50, the probability is above 95%, showing that duplicates become almost guaranteed in moderately large groups despite having 365 possible birthdays.
+
+# problem2
+```{r}
+library(broom)
+library(tidyverse)
+
+n <- 30
+sigma <- 5
+n_simulations <- 5000
+alpha <- 0.05
+
+mu_values <- c(0, 1, 2, 3, 4, 5, 6)
+
+simulate_t_test <- function(mu, n, sigma) {
+
+  x <- rnorm(n, mean = mu, sd = sigma)
+  
+  test_result <- t.test(x, mu = 0, alternative = "two.sided")
+  
+  tidy_result <- tidy(test_result)
+  
+  return(data.frame(
+    mu_hat = tidy_result$estimate,
+    p_value = tidy_result$p.value
+  ))
+}
+```
+
+```{r}
+results <- data.frame()
+
+for (mu in mu_values) {
+  
+  sim_results <- replicate(n_simulations, 
+                           simulate_t_test(mu, n, sigma), 
+                           simplify = FALSE)
+  
+  sim_df <- bind_rows(sim_results)
+  sim_df$true_mu <- mu
+  sim_df$rejected <- sim_df$p_value < alpha
+  
+  results <- bind_rows(results, sim_df)
+}
+
+power_summary <- results %>%
+  group_by(true_mu) %>%
+  summarise(
+    power = mean(rejected),
+    avg_estimate_all = mean(mu_hat),
+    avg_estimate_rejected = mean(mu_hat[rejected]),
+    n_rejected = sum(rejected)
+  )
+
+print(power_summary)
+```
+
+```{r}
+plot1 <- ggplot(power_summary, aes(x = true_mu, y = power)) +
+  geom_line(color = "blue", size = 1) +
+  geom_point(color = "blue", size = 3) +
+  labs(
+    title = "Relationship between Power and Effect Size",
+    x = "True μ value",
+    y = "Power (Proportion of H0 Rejections)"
+  ) +
+  theme_minimal() +
+  scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1))
+
+print(plot1)
+```
+Power increases as the true effect size μ increases.  
+When μ = 0, the rejection rate is approximately 0.05, matching the Type I error rate.  
+As μ becomes larger, the sample mean is more likely to differ substantially from 0, leading to higher power.
+```{r}
+plot2 <- ggplot(power_summary, aes(x = true_mu)) +
+  geom_line(aes(y = avg_estimate_all, color = "All samples"), size = 1) +
+  geom_point(aes(y = avg_estimate_all, color = "All samples"), size = 3) +
+  geom_line(aes(y = avg_estimate_rejected, color = "Rejected samples only"), 
+            size = 1, linetype = "dashed") +
+  geom_point(aes(y = avg_estimate_rejected, color = "Rejected samples only"), size = 3) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dotted", color = "black") +
+  labs(
+    title = "Relationship between Average Estimate and True μ",
+    x = "True μ value",
+    y = "Average estimated μ̂ value",
+    color = "Sample type"
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("All samples" = "lightblue", 
+                                 "Rejected samples only" = "pink"))
+print(plot2)
+```
+Across all samples, the average estimated μ̂ closely matches the true value μ, confirming that the sample mean is an unbiased estimator.  
+However, among *significant* results (p < 0.05), μ̂ is consistently larger than the true μ.  
+This inflation is most pronounced when μ is small and power is low.
+
+This simulation illustrates how effect size influences the performance of a one-sample t-test.  
+Power increases with μ because larger effect sizes produce sample means further from zero, making it more likely to reject the null hypothesis.  
+
+The sample mean itself is an unbiased estimator: across all replications, μ̂ closely matches the true μ.  
+However, when conditioning on statistically significant findings, μ̂ becomes inflated—a manifestation of selection bias.  
+
+Overall, these results demonstrate why statistically significant estimates tend to exaggerate effect sizes.
+
+# problem3
+```{r}
+library(tidyverse)
+library(broom)
+
+homicide_df <- read_csv("data/homicide-data.csv")
+
+homicide_df
+```
+
+```{r}
+homicide_clean <- homicide_df %>%
+  mutate(
+    city_state = str_c(city, ", ", state),
+    unsolved = disposition %in% c("Closed without arrest", "Open/No arrest")
+  ) %>%
+  group_by(city_state) %>%
+  summarise(
+    total = n(),
+    unsolved = sum(unsolved)
+  )
+
+homicide_clean
+```
+
+```{r}
+baltimore <- homicide_clean %>%
+  filter(city_state == "Baltimore, MD")
+
+baltimore_test <- prop.test(
+  x = baltimore$unsolved,
+  n = baltimore$total
+)
+
+baltimore_tidy <- broom::tidy(baltimore_test)
+
+baltimore_tidy
+```
+
+```{r}
+city_results <- homicide_clean %>%
+  mutate(
+    test = map2(unsolved, total, ~ prop.test(.x, .y)),
+    tidy = map(test, broom::tidy)
+  ) %>%
+  unnest(tidy) %>%
+  select(city_state, estimate, conf.low, conf.high)
+
+city_results
+```
+
+```{r}
+city_results %>%
+  mutate(city_state = fct_reorder(city_state, estimate)) %>%
+  ggplot(aes(x = city_state, y = estimate)) +
+  geom_point(size = 2, color = "blue") +
+  geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.3) +
+  coord_flip() +
+  labs(
+    title = "Proportion of Unsolved Homicides by City",
+    x = "City",
+    y = "Estimated proportion unsolved"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+The proportion of unsolved homicides varies widely across major U.S. cities.  
+Baltimore, MD has one of the highest rates, with an estimated unsolved proportion of  
+`r round(baltimore_tidy$estimate, 3)` and a 95% confidence interval of  
+(`r round(baltimore_tidy$conf.low, 3)`, `r round(baltimore_tidy$conf.high, 3)`).  
+
+Other cities exhibit substantially lower proportions, while some show even higher unsolved rates.  
+These differences may reflect variations in investigative resources, community cooperation,  
+case complexity, and police department practices.  
+
+Confidence intervals are wider in cities with fewer total homicides, reflecting greater uncertainty,  
+while larger cities provide more precise estimates.
